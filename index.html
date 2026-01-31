@@ -104,21 +104,9 @@
         }
 
         @media (orientation: portrait) {
-            body::before {
-                content: "Please rotate your device to landscape mode";
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                color: white;
-                font-size: 20px;
-                text-align: center;
-                padding: 20px;
-                z-index: 1000;
-            }
-
-            #keyboard {
-                display: none;
+            #piano {
+                width: 90%;
+                height: 40%;
             }
         }
     </style>
@@ -149,11 +137,16 @@
         let audioContext;
         const activeOscillators = new Map();
         const noteStartTimes = new Map();
+        const pendingStops = new Map();
 
         // Initialize audio context on first user interaction
         function initAudio() {
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            // Resume audio context if suspended
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
             }
         }
 
@@ -161,9 +154,15 @@
         function playNote(note) {
             initAudio();
 
+            // Cancel any pending stop timeout
+            if (pendingStops.has(note)) {
+                clearTimeout(pendingStops.get(note));
+                pendingStops.delete(note);
+            }
+
             // Stop existing note if playing
             if (activeOscillators.has(note)) {
-                stopNote(note);
+                stopNoteImmediately(note);
             }
 
             const frequency = noteFrequencies[note];
@@ -239,9 +238,11 @@
 
                 if (remainingTime > 0) {
                     // Schedule stop after minimum duration
-                    setTimeout(() => {
+                    const timeoutId = setTimeout(() => {
                         stopNoteImmediately(note);
+                        pendingStops.delete(note);
                     }, remainingTime);
+                    pendingStops.set(note, timeoutId);
                 } else {
                     // Minimum duration already elapsed, stop immediately
                     stopNoteImmediately(note);
