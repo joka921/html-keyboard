@@ -138,21 +138,33 @@
         const activeOscillators = new Map();
         const noteStartTimes = new Map();
         const pendingStops = new Map();
+        let audioUnlocked = false;
 
         // Initialize audio context on first user interaction
-        function initAudio() {
+        async function initAudio() {
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
             }
-            // Resume audio context if suspended
+
+            // Unlock audio on mobile devices (play silent buffer)
+            if (!audioUnlocked) {
+                const buffer = audioContext.createBuffer(1, 1, 22050);
+                const source = audioContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioContext.destination);
+                source.start(0);
+                audioUnlocked = true;
+            }
+
+            // Resume audio context if suspended (await to ensure it's running)
             if (audioContext.state === 'suspended') {
-                audioContext.resume();
+                await audioContext.resume();
             }
         }
 
         // Play note with piano-like sound
-        function playNote(note) {
-            initAudio();
+        async function playNote(note) {
+            await initAudio();
 
             // Cancel any pending stop timeout
             if (pendingStops.has(note)) {
