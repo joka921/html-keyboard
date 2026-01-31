@@ -148,6 +148,11 @@
         #start-button:active {
             transform: scale(0.95);
         }
+
+        #start-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -187,37 +192,57 @@
         function initAudioContext() {
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Unlock audio for iOS Safari - use both buffer and oscillator methods
-            // Method 1: Silent buffer
-            const buffer = audioContext.createBuffer(1, 1, 22050);
-            const bufferSource = audioContext.createBufferSource();
-            bufferSource.buffer = buffer;
-            bufferSource.connect(audioContext.destination);
-            bufferSource.start(0);
+            // Unlock audio for iOS Safari - play a very quiet but real sound
+            const unlockOscillator = audioContext.createOscillator();
+            const unlockGain = audioContext.createGain();
 
-            // Method 2: Silent oscillator (more reliable on iOS)
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            gainNode.gain.setValueAtTime(0.00001, audioContext.currentTime);
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.01);
+            // Set a very low but non-zero volume
+            unlockGain.gain.setValueAtTime(0.001, audioContext.currentTime);
+            unlockGain.gain.linearRampToValueAtTime(0.0001, audioContext.currentTime + 0.2);
 
-            // Resume context if suspended (important for iOS)
-            if (audioContext.state === 'suspended') {
-                audioContext.resume().then(() => {
-                    console.log('Audio context resumed');
+            unlockOscillator.frequency.setValueAtTime(440, audioContext.currentTime);
+            unlockOscillator.connect(unlockGain);
+            unlockGain.connect(audioContext.destination);
+
+            // Play for 200ms to ensure unlock
+            unlockOscillator.start(audioContext.currentTime);
+            unlockOscillator.stop(audioContext.currentTime + 0.2);
+
+            // Ensure context is running
+            const waitForRunning = () => {
+                if (audioContext.state === 'running') {
+                    console.log('Audio context is running');
                     audioReady = true;
-                });
-            } else {
-                audioReady = true;
-            }
+                } else if (audioContext.state === 'suspended') {
+                    audioContext.resume().then(() => {
+                        console.log('Audio context resumed');
+                        // Check again after resume
+                        setTimeout(() => {
+                            if (audioContext.state === 'running') {
+                                audioReady = true;
+                            } else {
+                                console.error('Audio context failed to start, state:', audioContext.state);
+                            }
+                        }, 100);
+                    }).catch(err => {
+                        console.error('Failed to resume audio context:', err);
+                    });
+                }
+            };
+
+            // Wait a moment then check
+            setTimeout(waitForRunning, 100);
         }
 
         // Play note with piano-like sound
         function playNote(note) {
             if (!audioReady || !audioContext) {
+                console.log('Audio not ready or no context');
+                return;
+            }
+
+            if (audioContext.state !== 'running') {
+                console.log('Audio context not running, state:', audioContext.state);
                 return;
             }
 
@@ -239,7 +264,8 @@
             const masterGain = audioContext.createGain();
 
             // Piano-like ADSR envelope
-            masterGain.gain.setValueAtTime(0, currentTime);
+            // Start with a very small non-zero value for iOS compatibility
+            masterGain.gain.setValueAtTime(0.0001, currentTime);
             masterGain.gain.linearRampToValueAtTime(0.3, currentTime + 0.005); // Quick attack
             masterGain.gain.exponentialRampToValueAtTime(0.2, currentTime + 0.1); // Decay
             masterGain.gain.exponentialRampToValueAtTime(0.05, currentTime + 2); // Sustain/release
@@ -333,8 +359,15 @@
                 try {
                     gainNode.gain.cancelScheduledValues(currentTime);
                     gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
-                    gainNode.gain.exponentialRampToValueAtTime(0.001, currentTime + 0.3);
-                    oscillators.forEach(osc => osc.stop(currentTime + 0.3));
+                    // Use 0.0001 instead of 0.001 for better iOS compatibility
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, currentTime + 0.3);
+                    oscillators.forEach(osc => {
+                        try {
+                            osc.stop(currentTime + 0.3);
+                        } catch (oscError) {
+                            // Oscillator might already be stopped
+                        }
+                    });
                 } catch (e) {
                     // If stopping fails, just clean up the tracking
                     console.error('Error stopping note:', e);
@@ -428,8 +461,15 @@
             const startButton = document.getElementById('start-button');
 
             const handleStart = () => {
+                startButton.textContent = 'Initializing...';
+                startButton.disabled = true;
+
                 initAudioContext();
-                startOverlay.classList.add('hidden');
+
+                // Hide overlay after a short delay to ensure audio is initialized
+                setTimeout(() => {
+                    startOverlay.classList.add('hidden');
+                }, 300);
             };
 
             // Handle both click and touch for iOS compatibility
