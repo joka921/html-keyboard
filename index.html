@@ -184,22 +184,35 @@
         let audioReady = false;
 
         // Initialize audio context - called from start button
-        async function initAudioContext() {
+        function initAudioContext() {
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Resume if needed
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
-            }
-
-            // Play a silent buffer to unlock audio on iOS/mobile
+            // Unlock audio for iOS Safari - use both buffer and oscillator methods
+            // Method 1: Silent buffer
             const buffer = audioContext.createBuffer(1, 1, 22050);
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioContext.destination);
-            source.start(0);
+            const bufferSource = audioContext.createBufferSource();
+            bufferSource.buffer = buffer;
+            bufferSource.connect(audioContext.destination);
+            bufferSource.start(0);
 
-            audioReady = true;
+            // Method 2: Silent oscillator (more reliable on iOS)
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            gainNode.gain.setValueAtTime(0.00001, audioContext.currentTime);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.01);
+
+            // Resume context if suspended (important for iOS)
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().then(() => {
+                    console.log('Audio context resumed');
+                    audioReady = true;
+                });
+            } else {
+                audioReady = true;
+            }
         }
 
         // Play note with piano-like sound
@@ -414,16 +427,22 @@
             const startOverlay = document.getElementById('start-overlay');
             const startButton = document.getElementById('start-button');
 
-            startButton.addEventListener('click', async () => {
-                await initAudioContext();
+            const handleStart = () => {
+                initAudioContext();
                 startOverlay.classList.add('hidden');
+            };
+
+            // Handle both click and touch for iOS compatibility
+            startButton.addEventListener('click', handleStart);
+            startButton.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                handleStart();
             });
 
             // Also allow clicking anywhere on the overlay
-            startOverlay.addEventListener('click', async (e) => {
+            startOverlay.addEventListener('click', (e) => {
                 if (e.target === startOverlay) {
-                    await initAudioContext();
-                    startOverlay.classList.add('hidden');
+                    handleStart();
                 }
             });
         });
