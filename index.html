@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="screen-orientation" content="landscape">
+    <title>Piano Keyboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #1a1a1a;
+            touch-action: none;
+        }
+
+        #keyboard {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #piano {
+            position: relative;
+            display: flex;
+            height: 80%;
+            width: 95%;
+        }
+
+        .white-key {
+            flex: 1;
+            height: 100%;
+            background: linear-gradient(to bottom, #ffffff 0%, #f0f0f0 100%);
+            border: 2px solid #000;
+            border-radius: 0 0 5px 5px;
+            cursor: pointer;
+            position: relative;
+            transition: background 0.05s;
+        }
+
+        .white-key:active,
+        .white-key.active {
+            background: linear-gradient(to bottom, #d0d0d0 0%, #c0c0c0 100%);
+        }
+
+        .black-key {
+            position: absolute;
+            width: 6%;
+            height: 60%;
+            background: linear-gradient(to bottom, #2a2a2a 0%, #000000 100%);
+            border: 1px solid #000;
+            border-radius: 0 0 3px 3px;
+            cursor: pointer;
+            z-index: 10;
+            transition: background 0.05s;
+        }
+
+        .black-key:active,
+        .black-key.active {
+            background: linear-gradient(to bottom, #4a4a4a 0%, #2a2a2a 100%);
+        }
+
+        /* Position black keys perfectly centered between white keys */
+        .black-key[data-note="C#4"] { left: 7%; }
+        .black-key[data-note="D#4"] { left: 17%; }
+        .black-key[data-note="F#4"] { left: 37%; }
+        .black-key[data-note="G#4"] { left: 47%; }
+        .black-key[data-note="A#4"] { left: 57%; }
+        .black-key[data-note="C#5"] { left: 77%; }
+        .black-key[data-note="D#5"] { left: 87%; }
+
+        @media (max-width: 768px) {
+            #piano {
+                width: 98%;
+                height: 70%;
+            }
+
+            .black-key {
+                width: 8%;
+            }
+
+            /* Adjust black key positions for 8% width (centered at same positions) */
+            .black-key[data-note="C#4"] { left: 6%; }
+            .black-key[data-note="D#4"] { left: 16%; }
+            .black-key[data-note="F#4"] { left: 36%; }
+            .black-key[data-note="G#4"] { left: 46%; }
+            .black-key[data-note="A#4"] { left: 56%; }
+            .black-key[data-note="C#5"] { left: 76%; }
+            .black-key[data-note="D#5"] { left: 86%; }
+        }
+
+        @media (orientation: portrait) {
+            body::before {
+                content: "Please rotate your device to landscape mode";
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                color: white;
+                font-size: 20px;
+                text-align: center;
+                padding: 20px;
+                z-index: 1000;
+            }
+
+            #keyboard {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="keyboard">
+        <div id="piano"></div>
+    </div>
+
+    <script>
+        // Note frequencies (C4 to E5)
+        const noteFrequencies = {
+            'C4': 261.63, 'C#4': 277.18, 'D4': 293.66, 'D#4': 311.13,
+            'E4': 329.63, 'F4': 349.23, 'F#4': 369.99, 'G4': 392.00,
+            'G#4': 415.30, 'A4': 440.00, 'A#4': 466.16, 'B4': 493.88,
+            'C5': 523.25, 'C#5': 554.37, 'D5': 587.33, 'D#5': 622.25,
+            'E5': 659.25
+        };
+
+        // White and black keys
+        const whiteKeys = ['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5'];
+        const blackKeys = ['C#4', 'D#4', 'F#4', 'G#4', 'A#4', 'C#5', 'D#5'];
+
+        // Minimum note duration in milliseconds (adjust this value to your preference)
+        const MIN_NOTE_DURATION = 500;
+
+        // Audio context
+        let audioContext;
+        const activeOscillators = new Map();
+        const noteStartTimes = new Map();
+
+        // Initialize audio context on first user interaction
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        // Play note with piano-like sound
+        function playNote(note) {
+            initAudio();
+
+            // Stop existing note if playing
+            if (activeOscillators.has(note)) {
+                stopNote(note);
+            }
+
+            const frequency = noteFrequencies[note];
+            const currentTime = audioContext.currentTime;
+
+            // Create master gain node
+            const masterGain = audioContext.createGain();
+
+            // Piano-like ADSR envelope
+            masterGain.gain.setValueAtTime(0, currentTime);
+            masterGain.gain.linearRampToValueAtTime(0.3, currentTime + 0.005); // Quick attack
+            masterGain.gain.exponentialRampToValueAtTime(0.2, currentTime + 0.1); // Decay
+            masterGain.gain.exponentialRampToValueAtTime(0.05, currentTime + 2); // Sustain/release
+
+            // Create multiple oscillators for harmonics (piano-like timbre)
+            const oscillators = [];
+
+            // Fundamental
+            const osc1 = audioContext.createOscillator();
+            osc1.type = 'triangle';
+            osc1.frequency.setValueAtTime(frequency, currentTime);
+            const gain1 = audioContext.createGain();
+            gain1.gain.setValueAtTime(0.4, currentTime);
+            osc1.connect(gain1);
+            gain1.connect(masterGain);
+            oscillators.push(osc1);
+
+            // Second harmonic
+            const osc2 = audioContext.createOscillator();
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(frequency * 2, currentTime);
+            const gain2 = audioContext.createGain();
+            gain2.gain.setValueAtTime(0.15, currentTime);
+            osc2.connect(gain2);
+            gain2.connect(masterGain);
+            oscillators.push(osc2);
+
+            // Third harmonic
+            const osc3 = audioContext.createOscillator();
+            osc3.type = 'sine';
+            osc3.frequency.setValueAtTime(frequency * 3, currentTime);
+            const gain3 = audioContext.createGain();
+            gain3.gain.setValueAtTime(0.08, currentTime);
+            osc3.connect(gain3);
+            gain3.connect(masterGain);
+            oscillators.push(osc3);
+
+            // Fourth harmonic
+            const osc4 = audioContext.createOscillator();
+            osc4.type = 'sine';
+            osc4.frequency.setValueAtTime(frequency * 4, currentTime);
+            const gain4 = audioContext.createGain();
+            gain4.gain.setValueAtTime(0.04, currentTime);
+            osc4.connect(gain4);
+            gain4.connect(masterGain);
+            oscillators.push(osc4);
+
+            masterGain.connect(audioContext.destination);
+
+            // Start all oscillators
+            oscillators.forEach(osc => osc.start(currentTime));
+
+            activeOscillators.set(note, { oscillators, gainNode: masterGain });
+            noteStartTimes.set(note, Date.now());
+        }
+
+        // Stop note
+        function stopNote(note) {
+            if (activeOscillators.has(note)) {
+                const noteStartTime = noteStartTimes.get(note);
+                const elapsed = Date.now() - noteStartTime;
+                const remainingTime = MIN_NOTE_DURATION - elapsed;
+
+                if (remainingTime > 0) {
+                    // Schedule stop after minimum duration
+                    setTimeout(() => {
+                        stopNoteImmediately(note);
+                    }, remainingTime);
+                } else {
+                    // Minimum duration already elapsed, stop immediately
+                    stopNoteImmediately(note);
+                }
+            }
+        }
+
+        // Actually stop the note
+        function stopNoteImmediately(note) {
+            if (activeOscillators.has(note)) {
+                const { oscillators, gainNode } = activeOscillators.get(note);
+                const currentTime = audioContext.currentTime;
+
+                gainNode.gain.cancelScheduledValues(currentTime);
+                gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, currentTime + 0.3);
+
+                oscillators.forEach(osc => osc.stop(currentTime + 0.3));
+                activeOscillators.delete(note);
+                noteStartTimes.delete(note);
+            }
+        }
+
+        // Create keyboard
+        function createKeyboard() {
+            const piano = document.getElementById('piano');
+
+            // Create white keys
+            whiteKeys.forEach(note => {
+                const key = document.createElement('div');
+                key.className = 'white-key';
+                key.dataset.note = note;
+                piano.appendChild(key);
+            });
+
+            // Create black keys
+            blackKeys.forEach(note => {
+                const key = document.createElement('div');
+                key.className = 'black-key';
+                key.dataset.note = note;
+                piano.appendChild(key);
+            });
+
+            // Add event listeners
+            const allKeys = document.querySelectorAll('.white-key, .black-key');
+            allKeys.forEach(key => {
+                const note = key.dataset.note;
+
+                // Mouse events
+                key.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    key.classList.add('active');
+                    playNote(note);
+                });
+
+                key.addEventListener('mouseup', (e) => {
+                    e.preventDefault();
+                    key.classList.remove('active');
+                    stopNote(note);
+                });
+
+                key.addEventListener('mouseleave', (e) => {
+                    key.classList.remove('active');
+                    stopNote(note);
+                });
+
+                // Touch events
+                key.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    key.classList.add('active');
+                    playNote(note);
+                });
+
+                key.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    key.classList.remove('active');
+                    stopNote(note);
+                });
+
+                key.addEventListener('touchcancel', (e) => {
+                    e.preventDefault();
+                    key.classList.remove('active');
+                    stopNote(note);
+                });
+            });
+        }
+
+        // Lock screen orientation to landscape on mobile
+        function lockOrientation() {
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(() => {
+                    // Orientation lock might fail, that's okay
+                });
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            createKeyboard();
+            lockOrientation();
+        });
+
+        // Prevent default touch behavior
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+    </script>
+</body>
+</html>
