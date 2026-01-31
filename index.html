@@ -109,9 +109,52 @@
                 height: 40%;
             }
         }
+
+        /* Start overlay */
+        #start-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            cursor: pointer;
+        }
+
+        #start-overlay.hidden {
+            display: none;
+        }
+
+        #start-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-size: 24px;
+            padding: 20px 40px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s;
+        }
+
+        #start-button:hover {
+            transform: scale(1.05);
+        }
+
+        #start-button:active {
+            transform: scale(0.95);
+        }
     </style>
 </head>
 <body>
+    <div id="start-overlay">
+        <button id="start-button">Start Playing</button>
+    </div>
+
     <div id="keyboard">
         <div id="piano"></div>
     </div>
@@ -138,58 +181,30 @@
         const activeOscillators = new Map();
         const noteStartTimes = new Map();
         const pendingStops = new Map();
-        const startingNotes = new Map();
-        let audioInitialized = false;
+        let audioReady = false;
 
-        // Initialize audio context on first user interaction
-        async function initAudio() {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            }
+        // Initialize audio context - called from start button
+        async function initAudioContext() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Always resume if suspended (handles energy saving on mobile)
+            // Resume if needed
             if (audioContext.state === 'suspended') {
                 await audioContext.resume();
             }
 
-            // Play a dummy silent oscillator to truly unlock audio on mobile (only once)
-            // This ensures the audio system is fully initialized
-            if (!audioInitialized) {
-                const silentOsc = audioContext.createOscillator();
-                const silentGain = audioContext.createGain();
-                silentGain.gain.setValueAtTime(0.00001, audioContext.currentTime);
-                silentOsc.connect(silentGain);
-                silentGain.connect(audioContext.destination);
-                silentOsc.start(audioContext.currentTime);
-                silentOsc.stop(audioContext.currentTime + 0.1);
+            // Play a silent buffer to unlock audio on iOS/mobile
+            const buffer = audioContext.createBuffer(1, 1, 22050);
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+            source.start(0);
 
-                // Wait a bit for the audio system to truly initialize
-                await new Promise(resolve => setTimeout(resolve, 100));
-
-                audioInitialized = true;
-            }
-
-            // Ensure context is running
-            if (audioContext.state !== 'running') {
-                await audioContext.resume();
-            }
+            audioReady = true;
         }
 
         // Play note with piano-like sound
-        async function playNote(note) {
-            // Mark note as starting
-            startingNotes.set(note, false); // false = not cancelled yet
-
-            await initAudio();
-
-            if (!audioContext) {
-                startingNotes.delete(note);
-                return;
-            }
-
-            // Check if note was cancelled while initializing
-            if (startingNotes.get(note) === true) {
-                startingNotes.delete(note);
+        function playNote(note) {
+            if (!audioReady || !audioContext) {
                 return;
             }
 
@@ -266,19 +281,10 @@
 
             activeOscillators.set(note, { oscillators, gainNode: masterGain });
             noteStartTimes.set(note, Date.now());
-
-            // Note is no longer starting
-            startingNotes.delete(note);
         }
 
         // Stop note
         function stopNote(note) {
-            // If note is still starting, mark it to be cancelled
-            if (startingNotes.has(note)) {
-                startingNotes.set(note, true); // true = cancelled
-                return;
-            }
-
             if (activeOscillators.has(note)) {
                 const noteStartTime = noteStartTimes.get(note);
                 const elapsed = Date.now() - noteStartTime;
@@ -403,6 +409,23 @@
         document.addEventListener('DOMContentLoaded', () => {
             createKeyboard();
             lockOrientation();
+
+            // Handle start button
+            const startOverlay = document.getElementById('start-overlay');
+            const startButton = document.getElementById('start-button');
+
+            startButton.addEventListener('click', async () => {
+                await initAudioContext();
+                startOverlay.classList.add('hidden');
+            });
+
+            // Also allow clicking anywhere on the overlay
+            startOverlay.addEventListener('click', async (e) => {
+                if (e.target === startOverlay) {
+                    await initAudioContext();
+                    startOverlay.classList.add('hidden');
+                }
+            });
         });
 
         // Prevent default touch behavior
