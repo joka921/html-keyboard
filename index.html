@@ -138,33 +138,29 @@
         const activeOscillators = new Map();
         const noteStartTimes = new Map();
         const pendingStops = new Map();
-        let audioUnlocked = false;
+        let audioResumePromise = null;
 
         // Initialize audio context on first user interaction
-        async function initAudio() {
+        function initAudio() {
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
             }
-
-            // Unlock audio on mobile devices (play silent buffer)
-            if (!audioUnlocked) {
-                const buffer = audioContext.createBuffer(1, 1, 22050);
-                const source = audioContext.createBufferSource();
-                source.buffer = buffer;
-                source.connect(audioContext.destination);
-                source.start(0);
-                audioUnlocked = true;
+            // Resume audio context if suspended (for mobile browsers)
+            if (audioContext.state === 'suspended' && !audioResumePromise) {
+                audioResumePromise = audioContext.resume().then(() => {
+                    audioResumePromise = null;
+                });
             }
-
-            // Resume audio context if suspended (await to ensure it's running)
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
-            }
+            return audioContext;
         }
 
         // Play note with piano-like sound
-        async function playNote(note) {
-            await initAudio();
+        function playNote(note) {
+            initAudio();
+
+            if (!audioContext) {
+                return;
+            }
 
             // Cancel any pending stop timeout
             if (pendingStops.has(note)) {
@@ -266,13 +262,25 @@
         function stopNoteImmediately(note) {
             if (activeOscillators.has(note)) {
                 const { oscillators, gainNode } = activeOscillators.get(note);
+
+                if (!audioContext) {
+                    activeOscillators.delete(note);
+                    noteStartTimes.delete(note);
+                    return;
+                }
+
                 const currentTime = audioContext.currentTime;
 
-                gainNode.gain.cancelScheduledValues(currentTime);
-                gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.001, currentTime + 0.3);
+                try {
+                    gainNode.gain.cancelScheduledValues(currentTime);
+                    gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, currentTime + 0.3);
+                    oscillators.forEach(osc => osc.stop(currentTime + 0.3));
+                } catch (e) {
+                    // If stopping fails, just clean up the tracking
+                    console.error('Error stopping note:', e);
+                }
 
-                oscillators.forEach(osc => osc.stop(currentTime + 0.3));
                 activeOscillators.delete(note);
                 noteStartTimes.delete(note);
             }
