@@ -138,27 +138,34 @@
         const activeOscillators = new Map();
         const noteStartTimes = new Map();
         const pendingStops = new Map();
-        let audioResumePromise = null;
+        const startingNotes = new Map();
 
         // Initialize audio context on first user interaction
-        function initAudio() {
+        async function initAudio() {
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
             }
             // Resume audio context if suspended (for mobile browsers)
-            if (audioContext.state === 'suspended' && !audioResumePromise) {
-                audioResumePromise = audioContext.resume().then(() => {
-                    audioResumePromise = null;
-                });
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
             }
-            return audioContext;
         }
 
         // Play note with piano-like sound
-        function playNote(note) {
-            initAudio();
+        async function playNote(note) {
+            // Mark note as starting
+            startingNotes.set(note, false); // false = not cancelled yet
+
+            await initAudio();
 
             if (!audioContext) {
+                startingNotes.delete(note);
+                return;
+            }
+
+            // Check if note was cancelled while initializing
+            if (startingNotes.get(note) === true) {
+                startingNotes.delete(note);
                 return;
             }
 
@@ -235,10 +242,19 @@
 
             activeOscillators.set(note, { oscillators, gainNode: masterGain });
             noteStartTimes.set(note, Date.now());
+
+            // Note is no longer starting
+            startingNotes.delete(note);
         }
 
         // Stop note
         function stopNote(note) {
+            // If note is still starting, mark it to be cancelled
+            if (startingNotes.has(note)) {
+                startingNotes.set(note, true); // true = cancelled
+                return;
+            }
+
             if (activeOscillators.has(note)) {
                 const noteStartTime = noteStartTimes.get(note);
                 const elapsed = Date.now() - noteStartTime;
