@@ -139,6 +139,7 @@
         const noteStartTimes = new Map();
         const pendingStops = new Map();
         const startingNotes = new Map();
+        let audioInitialized = false;
 
         // Initialize audio context on first user interaction
         async function initAudio() {
@@ -151,28 +152,26 @@
                 await audioContext.resume();
             }
 
-            // Play a dummy silent oscillator to truly unlock audio on mobile
+            // Play a dummy silent oscillator to truly unlock audio on mobile (only once)
             // This ensures the audio system is fully initialized
-            const silentOsc = audioContext.createOscillator();
-            const silentGain = audioContext.createGain();
-            silentGain.gain.setValueAtTime(0, audioContext.currentTime);
-            silentOsc.connect(silentGain);
-            silentGain.connect(audioContext.destination);
-            silentOsc.start(audioContext.currentTime);
-            silentOsc.stop(audioContext.currentTime + 0.001);
+            if (!audioInitialized) {
+                const silentOsc = audioContext.createOscillator();
+                const silentGain = audioContext.createGain();
+                silentGain.gain.setValueAtTime(0.00001, audioContext.currentTime);
+                silentOsc.connect(silentGain);
+                silentGain.connect(audioContext.destination);
+                silentOsc.start(audioContext.currentTime);
+                silentOsc.stop(audioContext.currentTime + 0.1);
 
-            // Wait for context to be truly running
+                // Wait a bit for the audio system to truly initialize
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                audioInitialized = true;
+            }
+
+            // Ensure context is running
             if (audioContext.state !== 'running') {
-                await new Promise(resolve => {
-                    const checkState = () => {
-                        if (audioContext.state === 'running') {
-                            resolve();
-                        } else {
-                            setTimeout(checkState, 10);
-                        }
-                    };
-                    checkState();
-                });
+                await audioContext.resume();
             }
         }
 
