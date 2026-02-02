@@ -19,16 +19,63 @@
             height: 100vh;
             overflow: hidden;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            flex-direction: column;
             background: #1a1a1a;
             touch-action: none;
         }
 
+        #controls {
+            background: #2a2a2a;
+            padding: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            border-bottom: 2px solid #444;
+        }
+
+        .backend-button {
+            background: #444;
+            color: #fff;
+            border: 2px solid #666;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+            min-width: 120px;
+        }
+
+        .backend-button:hover {
+            background: #555;
+        }
+
+        .backend-button.active {
+            background: #667eea;
+            border-color: #667eea;
+            font-weight: bold;
+        }
+
+        .backend-button.loading {
+            background: #ff9800;
+            border-color: #ff9800;
+        }
+
+        .backend-button.error {
+            background: #f44336;
+            border-color: #f44336;
+        }
+
+        .status-text {
+            color: #aaa;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
         #keyboard {
+            flex: 1;
             position: relative;
-            width: 100%;
-            height: 100%;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -101,6 +148,12 @@
             .black-key[data-note="A#4"] { left: 56%; }
             .black-key[data-note="C#5"] { left: 76%; }
             .black-key[data-note="D#5"] { left: 86%; }
+
+            .backend-button {
+                font-size: 12px;
+                padding: 6px 12px;
+                min-width: 100px;
+            }
         }
 
         @media (orientation: portrait) {
@@ -160,9 +213,19 @@
         <button id="start-button">Start Playing</button>
     </div>
 
+    <div id="controls">
+        <button class="backend-button" data-backend="A">Backend A: Oscillators</button>
+        <button class="backend-button" data-backend="B">Backend B: Samples</button>
+        <button class="backend-button" data-backend="D">Backend D: Tone.js</button>
+        <span class="status-text" id="status-text">Select a backend</span>
+    </div>
+
     <div id="keyboard">
         <div id="piano"></div>
     </div>
+
+    <!-- Load Tone.js from CDN for Backend D -->
+    <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.min.js"></script>
 
     <script>
         // Note frequencies (C4 to E5)
@@ -177,208 +240,580 @@
         // White and black keys
         const whiteKeys = ['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5'];
         const blackKeys = ['C#4', 'D#4', 'F#4', 'G#4', 'A#4', 'C#5', 'D#5'];
+        const allNotes = Object.keys(noteFrequencies);
 
-        // Minimum note duration in milliseconds (adjust this value to your preference)
+        // Minimum note duration in milliseconds
         const MIN_NOTE_DURATION = 400;
 
-        // Audio context
-        let audioContext;
-        const activeOscillators = new Map();
-        const noteStartTimes = new Map();
-        const pendingStops = new Map();
+        // Global state
+        let currentBackend = null;
         let audioReady = false;
 
-        // Initialize audio context - called from start button
-        function initAudioContext() {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // ====================================================================
+        // BACKEND A: Web Audio API with Oscillators (Original Implementation)
+        // ====================================================================
+        const BackendA = {
+            name: 'Oscillators',
+            audioContext: null,
+            activeOscillators: new Map(),
+            noteStartTimes: new Map(),
+            pendingStops: new Map(),
 
-            // Unlock audio for iOS Safari - play a very quiet but real sound
-            const unlockOscillator = audioContext.createOscillator();
-            const unlockGain = audioContext.createGain();
+            async init() {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Set a very low but non-zero volume
-            unlockGain.gain.setValueAtTime(0.001, audioContext.currentTime);
-            unlockGain.gain.linearRampToValueAtTime(0.0001, audioContext.currentTime + 0.2);
+                // Unlock audio for iOS Safari
+                const unlockOscillator = this.audioContext.createOscillator();
+                const unlockGain = this.audioContext.createGain();
+                unlockGain.gain.setValueAtTime(0.001, this.audioContext.currentTime);
+                unlockGain.gain.linearRampToValueAtTime(0.0001, this.audioContext.currentTime + 0.2);
+                unlockOscillator.frequency.setValueAtTime(440, this.audioContext.currentTime);
+                unlockOscillator.connect(unlockGain);
+                unlockGain.connect(this.audioContext.destination);
+                unlockOscillator.start(this.audioContext.currentTime);
+                unlockOscillator.stop(this.audioContext.currentTime + 0.2);
 
-            unlockOscillator.frequency.setValueAtTime(440, audioContext.currentTime);
-            unlockOscillator.connect(unlockGain);
-            unlockGain.connect(audioContext.destination);
-
-            // Play for 200ms to ensure unlock
-            unlockOscillator.start(audioContext.currentTime);
-            unlockOscillator.stop(audioContext.currentTime + 0.2);
-
-            // Ensure context is running
-            const waitForRunning = () => {
-                if (audioContext.state === 'running') {
-                    console.log('Audio context is running');
-                    audioReady = true;
-                } else if (audioContext.state === 'suspended') {
-                    audioContext.resume().then(() => {
-                        console.log('Audio context resumed');
-                        // Check again after resume
-                        setTimeout(() => {
-                            if (audioContext.state === 'running') {
-                                audioReady = true;
-                            } else {
-                                console.error('Audio context failed to start, state:', audioContext.state);
-                            }
-                        }, 100);
-                    }).catch(err => {
-                        console.error('Failed to resume audio context:', err);
-                    });
-                }
-            };
-
-            // Wait a moment then check
-            setTimeout(waitForRunning, 100);
-        }
-
-        // Play note with piano-like sound
-        function playNote(note) {
-            if (!audioReady || !audioContext) {
-                console.log('Audio not ready or no context');
-                return;
-            }
-
-            if (audioContext.state !== 'running') {
-                console.log('Audio context not running, state:', audioContext.state);
-                return;
-            }
-
-            // Cancel any pending stop timeout
-            if (pendingStops.has(note)) {
-                clearTimeout(pendingStops.get(note));
-                pendingStops.delete(note);
-            }
-
-            // Stop existing note if playing
-            if (activeOscillators.has(note)) {
-                stopNoteImmediately(note);
-            }
-
-            const frequency = noteFrequencies[note];
-            const currentTime = audioContext.currentTime;
-
-            // Create master gain node
-            const masterGain = audioContext.createGain();
-
-            // Piano-like ADSR envelope
-            // Start with a very small non-zero value for iOS compatibility
-            masterGain.gain.setValueAtTime(0.0001, currentTime);
-            masterGain.gain.linearRampToValueAtTime(0.3, currentTime + 0.005); // Quick attack
-            masterGain.gain.exponentialRampToValueAtTime(0.2, currentTime + 0.1); // Decay
-            masterGain.gain.exponentialRampToValueAtTime(0.05, currentTime + 2); // Sustain/release
-
-            // Create multiple oscillators for harmonics (piano-like timbre)
-            const oscillators = [];
-
-            // Fundamental
-            const osc1 = audioContext.createOscillator();
-            osc1.type = 'triangle';
-            osc1.frequency.setValueAtTime(frequency, currentTime);
-            const gain1 = audioContext.createGain();
-            gain1.gain.setValueAtTime(0.4, currentTime);
-            osc1.connect(gain1);
-            gain1.connect(masterGain);
-            oscillators.push(osc1);
-
-            // Second harmonic
-            const osc2 = audioContext.createOscillator();
-            osc2.type = 'sine';
-            osc2.frequency.setValueAtTime(frequency * 2, currentTime);
-            const gain2 = audioContext.createGain();
-            gain2.gain.setValueAtTime(0.15, currentTime);
-            osc2.connect(gain2);
-            gain2.connect(masterGain);
-            oscillators.push(osc2);
-
-            // Third harmonic
-            const osc3 = audioContext.createOscillator();
-            osc3.type = 'sine';
-            osc3.frequency.setValueAtTime(frequency * 3, currentTime);
-            const gain3 = audioContext.createGain();
-            gain3.gain.setValueAtTime(0.08, currentTime);
-            osc3.connect(gain3);
-            gain3.connect(masterGain);
-            oscillators.push(osc3);
-
-            // Fourth harmonic
-            const osc4 = audioContext.createOscillator();
-            osc4.type = 'sine';
-            osc4.frequency.setValueAtTime(frequency * 4, currentTime);
-            const gain4 = audioContext.createGain();
-            gain4.gain.setValueAtTime(0.04, currentTime);
-            osc4.connect(gain4);
-            gain4.connect(masterGain);
-            oscillators.push(osc4);
-
-            masterGain.connect(audioContext.destination);
-
-            // Start all oscillators
-            oscillators.forEach(osc => osc.start(currentTime));
-
-            activeOscillators.set(note, { oscillators, gainNode: masterGain });
-            noteStartTimes.set(note, Date.now());
-        }
-
-        // Stop note
-        function stopNote(note) {
-            if (activeOscillators.has(note)) {
-                const noteStartTime = noteStartTimes.get(note);
-                const elapsed = Date.now() - noteStartTime;
-                const remainingTime = MIN_NOTE_DURATION - elapsed;
-
-                if (remainingTime > 0) {
-                    // Schedule stop after minimum duration
-                    const timeoutId = setTimeout(() => {
-                        stopNoteImmediately(note);
-                        pendingStops.delete(note);
-                    }, remainingTime);
-                    pendingStops.set(note, timeoutId);
-                } else {
-                    // Minimum duration already elapsed, stop immediately
-                    stopNoteImmediately(note);
-                }
-            }
-        }
-
-        // Actually stop the note
-        function stopNoteImmediately(note) {
-            if (activeOscillators.has(note)) {
-                const { oscillators, gainNode } = activeOscillators.get(note);
-
-                if (!audioContext) {
-                    activeOscillators.delete(note);
-                    noteStartTimes.delete(note);
-                    return;
-                }
-
-                const currentTime = audioContext.currentTime;
-
-                try {
-                    gainNode.gain.cancelScheduledValues(currentTime);
-                    gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
-                    // Use 0.0001 instead of 0.001 for better iOS compatibility
-                    gainNode.gain.exponentialRampToValueAtTime(0.0001, currentTime + 0.3);
-                    oscillators.forEach(osc => {
-                        try {
-                            osc.stop(currentTime + 0.3);
-                        } catch (oscError) {
-                            // Oscillator might already be stopped
+                // Wait for audio context to be running
+                await new Promise((resolve, reject) => {
+                    const checkRunning = () => {
+                        if (this.audioContext.state === 'running') {
+                            resolve();
+                        } else if (this.audioContext.state === 'suspended') {
+                            this.audioContext.resume().then(() => {
+                                setTimeout(() => {
+                                    if (this.audioContext.state === 'running') {
+                                        resolve();
+                                    } else {
+                                        reject(new Error('Audio context failed to start'));
+                                    }
+                                }, 100);
+                            }).catch(reject);
+                        } else {
+                            reject(new Error('Audio context in unexpected state'));
                         }
-                    });
-                } catch (e) {
-                    // If stopping fails, just clean up the tracking
-                    console.error('Error stopping note:', e);
+                    };
+                    setTimeout(checkRunning, 100);
+                });
+            },
+
+            playNote(note) {
+                if (!this.audioContext || this.audioContext.state !== 'running') return;
+
+                // Cancel any pending stop timeout
+                if (this.pendingStops.has(note)) {
+                    clearTimeout(this.pendingStops.get(note));
+                    this.pendingStops.delete(note);
                 }
 
-                activeOscillators.delete(note);
-                noteStartTimes.delete(note);
+                // Stop existing note if playing
+                if (this.activeOscillators.has(note)) {
+                    this.stopNoteImmediately(note);
+                }
+
+                const frequency = noteFrequencies[note];
+                const currentTime = this.audioContext.currentTime;
+
+                // Create master gain node
+                const masterGain = this.audioContext.createGain();
+                masterGain.gain.setValueAtTime(0.0001, currentTime);
+                masterGain.gain.linearRampToValueAtTime(0.3, currentTime + 0.005);
+                masterGain.gain.exponentialRampToValueAtTime(0.2, currentTime + 0.1);
+                masterGain.gain.exponentialRampToValueAtTime(0.05, currentTime + 2);
+
+                // Create multiple oscillators for harmonics
+                const oscillators = [];
+
+                // Fundamental
+                const osc1 = this.audioContext.createOscillator();
+                osc1.type = 'triangle';
+                osc1.frequency.setValueAtTime(frequency, currentTime);
+                const gain1 = this.audioContext.createGain();
+                gain1.gain.setValueAtTime(0.4, currentTime);
+                osc1.connect(gain1);
+                gain1.connect(masterGain);
+                oscillators.push(osc1);
+
+                // Second harmonic
+                const osc2 = this.audioContext.createOscillator();
+                osc2.type = 'sine';
+                osc2.frequency.setValueAtTime(frequency * 2, currentTime);
+                const gain2 = this.audioContext.createGain();
+                gain2.gain.setValueAtTime(0.15, currentTime);
+                osc2.connect(gain2);
+                gain2.connect(masterGain);
+                oscillators.push(osc2);
+
+                // Third harmonic
+                const osc3 = this.audioContext.createOscillator();
+                osc3.type = 'sine';
+                osc3.frequency.setValueAtTime(frequency * 3, currentTime);
+                const gain3 = this.audioContext.createGain();
+                gain3.gain.setValueAtTime(0.08, currentTime);
+                osc3.connect(gain3);
+                gain3.connect(masterGain);
+                oscillators.push(osc3);
+
+                // Fourth harmonic
+                const osc4 = this.audioContext.createOscillator();
+                osc4.type = 'sine';
+                osc4.frequency.setValueAtTime(frequency * 4, currentTime);
+                const gain4 = this.audioContext.createGain();
+                gain4.gain.setValueAtTime(0.04, currentTime);
+                osc4.connect(gain4);
+                gain4.connect(masterGain);
+                oscillators.push(osc4);
+
+                masterGain.connect(this.audioContext.destination);
+
+                // Start all oscillators
+                oscillators.forEach(osc => osc.start(currentTime));
+
+                this.activeOscillators.set(note, { oscillators, gainNode: masterGain });
+                this.noteStartTimes.set(note, Date.now());
+            },
+
+            stopNote(note) {
+                if (this.activeOscillators.has(note)) {
+                    const noteStartTime = this.noteStartTimes.get(note);
+                    const elapsed = Date.now() - noteStartTime;
+                    const remainingTime = MIN_NOTE_DURATION - elapsed;
+
+                    if (remainingTime > 0) {
+                        const timeoutId = setTimeout(() => {
+                            this.stopNoteImmediately(note);
+                            this.pendingStops.delete(note);
+                        }, remainingTime);
+                        this.pendingStops.set(note, timeoutId);
+                    } else {
+                        this.stopNoteImmediately(note);
+                    }
+                }
+            },
+
+            stopNoteImmediately(note) {
+                if (this.activeOscillators.has(note)) {
+                    const { oscillators, gainNode } = this.activeOscillators.get(note);
+                    const currentTime = this.audioContext.currentTime;
+
+                    try {
+                        gainNode.gain.cancelScheduledValues(currentTime);
+                        gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+                        gainNode.gain.exponentialRampToValueAtTime(0.0001, currentTime + 0.3);
+                        oscillators.forEach(osc => {
+                            try {
+                                osc.stop(currentTime + 0.3);
+                            } catch (e) {}
+                        });
+                    } catch (e) {
+                        console.error('Error stopping note:', e);
+                    }
+
+                    this.activeOscillators.delete(note);
+                    this.noteStartTimes.delete(note);
+                }
+            },
+
+            cleanup() {
+                // Stop all playing notes
+                this.activeOscillators.forEach((_, note) => this.stopNoteImmediately(note));
+                this.pendingStops.forEach(timeoutId => clearTimeout(timeoutId));
+                this.pendingStops.clear();
+
+                // Close audio context
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                }
+            }
+        };
+
+        // ====================================================================
+        // BACKEND B: Web Audio API with AudioBuffers (Samples)
+        // ====================================================================
+        const BackendB = {
+            name: 'Samples (AudioBuffer)',
+            audioContext: null,
+            buffers: new Map(),
+            activeSources: new Map(),
+            noteStartTimes: new Map(),
+            pendingStops: new Map(),
+
+            async init() {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+                // Unlock audio
+                const unlockOscillator = this.audioContext.createOscillator();
+                const unlockGain = this.audioContext.createGain();
+                unlockGain.gain.setValueAtTime(0.001, this.audioContext.currentTime);
+                unlockOscillator.connect(unlockGain);
+                unlockGain.connect(this.audioContext.destination);
+                unlockOscillator.start(this.audioContext.currentTime);
+                unlockOscillator.stop(this.audioContext.currentTime + 0.1);
+
+                await this.audioContext.resume();
+
+                // Load all note samples
+                await this.loadSamples();
+
+                if (this.audioContext.state !== 'running') {
+                    throw new Error('Audio context not running');
+                }
+            },
+
+            async loadSamples() {
+                // For testing: generate samples using oscillators if files don't exist
+                // In production, replace with actual sample loading
+                const loadPromises = allNotes.map(async (note) => {
+                    try {
+                        // Try to load from sounds/ directory
+                        const response = await fetch(`sounds/${note}.mp3`);
+                        if (response.ok) {
+                            const arrayBuffer = await response.arrayBuffer();
+                            const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+                            this.buffers.set(note, audioBuffer);
+                        } else {
+                            // Fallback: generate a simple buffer using oscillator
+                            this.buffers.set(note, this.generateSampleBuffer(note));
+                        }
+                    } catch (error) {
+                        // Fallback: generate a simple buffer
+                        this.buffers.set(note, this.generateSampleBuffer(note));
+                    }
+                });
+
+                await Promise.all(loadPromises);
+            },
+
+            generateSampleBuffer(note) {
+                // Generate a 2-second piano-like sample
+                const duration = 2;
+                const sampleRate = this.audioContext.sampleRate;
+                const buffer = this.audioContext.createBuffer(1, duration * sampleRate, sampleRate);
+                const data = buffer.getChannelData(0);
+                const frequency = noteFrequencies[note];
+
+                for (let i = 0; i < buffer.length; i++) {
+                    const t = i / sampleRate;
+                    const decay = Math.exp(-t * 2); // Exponential decay
+
+                    // Mix fundamental and harmonics
+                    let sample = 0;
+                    sample += 0.4 * Math.sin(2 * Math.PI * frequency * t);
+                    sample += 0.15 * Math.sin(2 * Math.PI * frequency * 2 * t);
+                    sample += 0.08 * Math.sin(2 * Math.PI * frequency * 3 * t);
+                    sample += 0.04 * Math.sin(2 * Math.PI * frequency * 4 * t);
+
+                    data[i] = sample * decay;
+                }
+
+                return buffer;
+            },
+
+            playNote(note) {
+                if (!this.audioContext || !this.buffers.has(note)) return;
+
+                // Cancel pending stops
+                if (this.pendingStops.has(note)) {
+                    clearTimeout(this.pendingStops.get(note));
+                    this.pendingStops.delete(note);
+                }
+
+                // Stop existing note
+                if (this.activeSources.has(note)) {
+                    this.stopNoteImmediately(note);
+                }
+
+                const source = this.audioContext.createBufferSource();
+                const gainNode = this.audioContext.createGain();
+
+                source.buffer = this.buffers.get(note);
+                source.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+
+                // Set initial volume
+                gainNode.gain.setValueAtTime(0.6, this.audioContext.currentTime);
+
+                source.start(0);
+
+                this.activeSources.set(note, { source, gainNode });
+                this.noteStartTimes.set(note, Date.now());
+            },
+
+            stopNote(note) {
+                if (this.activeSources.has(note)) {
+                    const noteStartTime = this.noteStartTimes.get(note);
+                    const elapsed = Date.now() - noteStartTime;
+                    const remainingTime = MIN_NOTE_DURATION - elapsed;
+
+                    if (remainingTime > 0) {
+                        const timeoutId = setTimeout(() => {
+                            this.stopNoteImmediately(note);
+                            this.pendingStops.delete(note);
+                        }, remainingTime);
+                        this.pendingStops.set(note, timeoutId);
+                    } else {
+                        this.stopNoteImmediately(note);
+                    }
+                }
+            },
+
+            stopNoteImmediately(note) {
+                if (this.activeSources.has(note)) {
+                    const { source, gainNode } = this.activeSources.get(note);
+                    const currentTime = this.audioContext.currentTime;
+
+                    try {
+                        gainNode.gain.cancelScheduledValues(currentTime);
+                        gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0, currentTime + 0.3);
+                        source.stop(currentTime + 0.3);
+                    } catch (e) {
+                        console.error('Error stopping note:', e);
+                    }
+
+                    this.activeSources.delete(note);
+                    this.noteStartTimes.delete(note);
+                }
+            },
+
+            cleanup() {
+                this.activeSources.forEach((_, note) => this.stopNoteImmediately(note));
+                this.pendingStops.forEach(timeoutId => clearTimeout(timeoutId));
+                this.pendingStops.clear();
+                this.buffers.clear();
+
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                }
+            }
+        };
+
+        // ====================================================================
+        // BACKEND D: Tone.js Library
+        // ====================================================================
+        const BackendD = {
+            name: 'Tone.js',
+            sampler: null,
+            activeSources: new Map(),
+            noteStartTimes: new Map(),
+            pendingStops: new Map(),
+
+            async init() {
+                if (typeof Tone === 'undefined') {
+                    throw new Error('Tone.js library not loaded');
+                }
+
+                // Start Tone.js audio context
+                await Tone.start();
+
+                // Create a sampler with generated samples
+                // In production, you'd use real piano samples
+                this.sampler = new Tone.Sampler({
+                    urls: this.generateSampleUrls(),
+                    baseUrl: '',
+                    onload: () => {
+                        console.log('Tone.js sampler loaded');
+                    },
+                    release: 1,
+                    attack: 0.005,
+                }).toDestination();
+
+                // Since we're using data URLs, wait a bit for them to process
+                await new Promise(resolve => setTimeout(resolve, 100));
+            },
+
+            generateSampleUrls() {
+                // Generate very simple sine wave data URLs for testing
+                // In production, replace with actual piano sample URLs
+                const urls = {};
+
+                allNotes.forEach(note => {
+                    // Use a minimal silent data URL as placeholder
+                    // Tone.js will synthesize these notes
+                    urls[note] = this.createSineWaveDataUrl(noteFrequencies[note]);
+                });
+
+                return urls;
+            },
+
+            createSineWaveDataUrl(frequency) {
+                // Create a minimal WAV file with a piano-like tone
+                const sampleRate = 44100;
+                const duration = 2;
+                const numSamples = sampleRate * duration;
+
+                // WAV header + data
+                const buffer = new ArrayBuffer(44 + numSamples * 2);
+                const view = new DataView(buffer);
+
+                // WAV header
+                const writeString = (offset, string) => {
+                    for (let i = 0; i < string.length; i++) {
+                        view.setUint8(offset + i, string.charCodeAt(i));
+                    }
+                };
+
+                writeString(0, 'RIFF');
+                view.setUint32(4, 36 + numSamples * 2, true);
+                writeString(8, 'WAVE');
+                writeString(12, 'fmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true);
+                view.setUint16(22, 1, true);
+                view.setUint32(24, sampleRate, true);
+                view.setUint32(28, sampleRate * 2, true);
+                view.setUint16(32, 2, true);
+                view.setUint16(34, 16, true);
+                writeString(36, 'data');
+                view.setUint32(40, numSamples * 2, true);
+
+                // Generate samples
+                let offset = 44;
+                for (let i = 0; i < numSamples; i++) {
+                    const t = i / sampleRate;
+                    const decay = Math.exp(-t * 2);
+
+                    let sample = 0;
+                    sample += 0.4 * Math.sin(2 * Math.PI * frequency * t);
+                    sample += 0.15 * Math.sin(2 * Math.PI * frequency * 2 * t);
+                    sample += 0.08 * Math.sin(2 * Math.PI * frequency * 3 * t);
+
+                    const value = Math.max(-1, Math.min(1, sample * decay));
+                    view.setInt16(offset, value * 32767, true);
+                    offset += 2;
+                }
+
+                const blob = new Blob([buffer], { type: 'audio/wav' });
+                return URL.createObjectURL(blob);
+            },
+
+            playNote(note) {
+                if (!this.sampler) return;
+
+                // Cancel pending stops
+                if (this.pendingStops.has(note)) {
+                    clearTimeout(this.pendingStops.get(note));
+                    this.pendingStops.delete(note);
+                }
+
+                // Trigger the note with Tone.js
+                this.sampler.triggerAttack(note, Tone.now(), 0.8);
+                this.noteStartTimes.set(note, Date.now());
+                this.activeSources.set(note, true);
+            },
+
+            stopNote(note) {
+                if (this.activeSources.has(note)) {
+                    const noteStartTime = this.noteStartTimes.get(note);
+                    const elapsed = Date.now() - noteStartTime;
+                    const remainingTime = MIN_NOTE_DURATION - elapsed;
+
+                    if (remainingTime > 0) {
+                        const timeoutId = setTimeout(() => {
+                            this.stopNoteImmediately(note);
+                            this.pendingStops.delete(note);
+                        }, remainingTime);
+                        this.pendingStops.set(note, timeoutId);
+                    } else {
+                        this.stopNoteImmediately(note);
+                    }
+                }
+            },
+
+            stopNoteImmediately(note) {
+                if (this.activeSources.has(note) && this.sampler) {
+                    try {
+                        this.sampler.triggerRelease(note, Tone.now());
+                    } catch (e) {
+                        console.error('Error releasing note:', e);
+                    }
+                    this.activeSources.delete(note);
+                    this.noteStartTimes.delete(note);
+                }
+            },
+
+            cleanup() {
+                if (this.sampler) {
+                    this.sampler.releaseAll();
+                    this.sampler.dispose();
+                    this.sampler = null;
+                }
+                this.pendingStops.forEach(timeoutId => clearTimeout(timeoutId));
+                this.pendingStops.clear();
+                this.activeSources.clear();
+                this.noteStartTimes.clear();
+            }
+        };
+
+        // ====================================================================
+        // Backend Management
+        // ====================================================================
+        const backends = {
+            'A': BackendA,
+            'B': BackendB,
+            'D': BackendD
+        };
+
+        async function switchBackend(backendId) {
+            const backend = backends[backendId];
+            if (!backend) return;
+
+            const button = document.querySelector(`[data-backend="${backendId}"]`);
+            const statusText = document.getElementById('status-text');
+
+            // Clear all button states
+            document.querySelectorAll('.backend-button').forEach(btn => {
+                btn.classList.remove('active', 'loading', 'error');
+            });
+
+            button.classList.add('loading');
+            statusText.textContent = `Loading ${backend.name}...`;
+
+            try {
+                // Cleanup old backend
+                if (currentBackend) {
+                    currentBackend.cleanup();
+                }
+
+                // Initialize new backend
+                await backend.init();
+
+                currentBackend = backend;
+                audioReady = true;
+
+                button.classList.remove('loading');
+                button.classList.add('active');
+                statusText.textContent = `${backend.name} ready`;
+
+                console.log(`Switched to backend ${backendId}: ${backend.name}`);
+            } catch (error) {
+                console.error(`Failed to initialize backend ${backendId}:`, error);
+                button.classList.remove('loading');
+                button.classList.add('error');
+                statusText.textContent = `Error: ${error.message}`;
+                audioReady = false;
+                currentBackend = null;
             }
         }
 
-        // Create keyboard
+        function playNote(note) {
+            if (!audioReady || !currentBackend) {
+                console.log('Audio not ready or no backend selected');
+                return;
+            }
+            currentBackend.playNote(note);
+        }
+
+        function stopNote(note) {
+            if (currentBackend) {
+                currentBackend.stopNote(note);
+            }
+        }
+
+        // ====================================================================
+        // Keyboard UI
+        // ====================================================================
         function createKeyboard() {
             const piano = document.getElementById('piano');
 
@@ -442,44 +877,48 @@
             });
         }
 
-        // Lock screen orientation to landscape on mobile
         function lockOrientation() {
             if (screen.orientation && screen.orientation.lock) {
-                screen.orientation.lock('landscape').catch(() => {
-                    // Orientation lock might fail, that's okay
-                });
+                screen.orientation.lock('landscape').catch(() => {});
             }
         }
 
+        // ====================================================================
         // Initialize
+        // ====================================================================
         document.addEventListener('DOMContentLoaded', () => {
             createKeyboard();
             lockOrientation();
+
+            // Handle backend selection buttons
+            document.querySelectorAll('.backend-button').forEach(button => {
+                button.addEventListener('click', () => {
+                    const backendId = button.dataset.backend;
+                    switchBackend(backendId);
+                });
+            });
 
             // Handle start button
             const startOverlay = document.getElementById('start-overlay');
             const startButton = document.getElementById('start-button');
 
             const handleStart = () => {
-                startButton.textContent = 'Initializing...';
+                startButton.textContent = 'Starting...';
                 startButton.disabled = true;
 
-                initAudioContext();
-
-                // Hide overlay after a short delay to ensure audio is initialized
                 setTimeout(() => {
                     startOverlay.classList.add('hidden');
+                    // Auto-select Backend A as default
+                    switchBackend('A');
                 }, 300);
             };
 
-            // Handle both click and touch for iOS compatibility
             startButton.addEventListener('click', handleStart);
             startButton.addEventListener('touchend', (e) => {
                 e.preventDefault();
                 handleStart();
             });
 
-            // Also allow clicking anywhere on the overlay
             startOverlay.addEventListener('click', (e) => {
                 if (e.target === startOverlay) {
                     handleStart();
